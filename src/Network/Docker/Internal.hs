@@ -4,14 +4,18 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Network.Docker.Internal (
-      DockerT
+      Docker
+    , DockerT
     , runDocker
     , RequestURI
     , dockerRequest
+    , dockerRequestStream
+    , dockerRequestBytes
     ) where
 
 import           Control.Monad.Base (MonadBase)
@@ -26,12 +30,14 @@ import qualified Data.Attoparsec.ByteString as Atto
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import           Data.Char (isSpace, chr)
-import           Data.Conduit ((=$=), ($=+), yield, awaitForever)
+import           Data.Conduit ((=$=), ($$+-), ($=+), yield, awaitForever)
 import           Data.Conduit (Conduit, ResumableSource)
 import qualified Data.Conduit.Attoparsec as CA
 import qualified Data.Conduit.List as CL
 import           Data.Default.Class (def)
 import           Data.Maybe (fromMaybe)
+import           Data.Text (Text)
+import qualified Data.Text as T
 import           Data.X509.CertificateStore (CertificateStore, makeCertificateStore)
 import           Data.X509.File (readSignedObject)
 import           Data.X509.Validation (FailedReason(..), validateDefault)
@@ -49,7 +55,7 @@ import           System.FilePath ((</>))
 
 ------------------------------------------------------------------------
 
-type RequestURI = String
+type RequestURI = Text
 
 type HostName = String
 type Port     = String
@@ -64,6 +70,8 @@ data DockerState = DockerState {
 
 newtype DockerT m a = DockerT { runDockerT :: ReaderT DockerState (ResourceT m) a }
     deriving (Monad, Applicative, Functor)
+
+type Docker = DockerT IO
 
 deriving instance MonadIO m     => MonadIO (DockerT m)
 deriving instance MonadThrow m  => MonadThrow (DockerT m)
@@ -87,23 +95,43 @@ runDocker dio = do
 dockerRequest :: (MonadIO m, MonadThrow m, MonadBase IO m, A.FromJSON a)
               => RequestURI
               -> (Request -> Request)
-              -> DockerT m (Response (ResumableSource (DockerT m) a))
+              -> DockerT m (Response (DockerT m a))
 dockerRequest uri transformReq = do
+    response <- dockerRequestBytes uri transformReq
+    return (sinkJSON <$> response)
+
+dockerRequestStream :: (MonadIO m, MonadThrow m, MonadBase IO m, A.FromJSON a)
+              => RequestURI
+              -> (Request -> Request)
+              -> DockerT m (Response (ResumableSource (DockerT m) a))
+dockerRequestStream uri transformReq = do
+    response <- dockerRequestBytes uri transformReq
+    return (streamJSON <$> response)
+
+dockerRequestBytes :: (MonadIO m, MonadThrow m, MonadBase IO m)
+              => RequestURI
+              -> (Request -> Request)
+              -> DockerT m (Response (ResumableSource (DockerT m) B.ByteString))
+dockerRequestBytes uri transformReq = do
     DockerState{..} <- DockerT ask
 
-    let url = "https://" ++ dockerHost ++ ":" ++ dockerPort ++ uri
+    let url = "https://" ++ dockerHost ++ ":" ++ dockerPort ++ T.unpack uri
     request  <- transformReq <$> parseUrl url
-    response <- http request dockerManager
 
-    return (decodeJSON' <$> response)
+    http request dockerManager
 
 ------------------------------------------------------------------------
 
-decodeJSON' :: (MonadResource m, A.FromJSON a) => ResumableSource m B.ByteString -> ResumableSource m a
-decodeJSON' src = (src $=+ decodeJSON)
+sinkJSON :: forall m a. (MonadResource m, A.FromJSON a) => ResumableSource m B.ByteString -> m a
+sinkJSON src = do
+    json <- (src $$+- CA.sinkParser A.json)
+    either fail return (A.parseEither A.parseJSON json)
 
-decodeJSON :: (MonadIO m, MonadResource m, A.FromJSON a) => Conduit B.ByteString m a
-decodeJSON =
+streamJSON :: (MonadResource m, A.FromJSON a) => ResumableSource m B.ByteString -> ResumableSource m a
+streamJSON src = (src $=+ conduitJSON)
+
+conduitJSON :: (MonadIO m, MonadResource m, A.FromJSON a) => Conduit B.ByteString m a
+conduitJSON =
     CA.conduitParser json =$= CL.map snd =$= awaitForever parse
   where
     json     = A.json <* Atto.skipWhile isSpace8
