@@ -34,10 +34,9 @@ module Network.Docker (
     , ContainerName
     , Container(..)
     , NetworkSettings(..)
-    , Gateway
-    , IPAddress
     , IPPrefixLen
-    , MACAddress
+    , IPAddress(..)
+    , MACAddress(..)
 
     , create
     , containerFrom
@@ -306,11 +305,14 @@ data Error = Error {
 
 type HostName    = Text
 type DomainName  = Text
-type HostAddress = Text
-type Gateway     = Text
-type IPAddress   = Text
+type HostAddress = IPAddress
 type IPPrefixLen = Int
-type MACAddress  = Text
+
+newtype IPAddress = IPAddress { unIP :: Text }
+    deriving (Eq, Ord, Show)
+
+newtype MACAddress = MACAddress { unMAC :: Text }
+    deriving (Eq, Ord, Show)
 
 data Protocol = TCP | UDP
     deriving (Eq, Ord, Show)
@@ -348,7 +350,7 @@ data Container = Container {
     } deriving (Eq, Ord, Show)
 
 data NetworkSettings = NetworkSettings {
-      networkGateway     :: Gateway
+      networkGateway     :: IPAddress
     , networkIPAddress   :: IPAddress
     , networkIPPrefixLen :: IPPrefixLen
     , networkMACAddress  :: MACAddress
@@ -379,7 +381,7 @@ instance A.ToJSON (Map SrcPort [DstPort]) where
 instance A.ToJSON DstPort where
     toJSON (DstPort port addr) = A.object [
           "HostPort"    .= show port
-        , "HostAddress" .= fromMaybe "0.0.0.0" addr
+        , "HostAddress" .= maybe "0.0.0.0" unIP addr
         ]
 
 encodeProtocol :: Protocol -> Text
@@ -454,10 +456,10 @@ instance A.FromJSON Container where
 
 instance A.FromJSON NetworkSettings where
     parseJSON = A.withObject "NetworkSettings" $ \o -> do
-                NetworkSettings <$> o .: "Gateway"
-                                <*> o .: "IPAddress"
+                NetworkSettings <$> (IPAddress <$> o .: "Gateway")
+                                <*> (IPAddress <$> o .: "IPAddress")
                                 <*> o .: "IPPrefixLen"
-                                <*> o .: "MacAddress"
+                                <*> (MACAddress <$> o .: "MacAddress")
 
 ------------------------------------------------------------------------
 
