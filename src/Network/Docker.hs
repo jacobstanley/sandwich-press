@@ -193,9 +193,23 @@ data Image = Image {
   , imageRepoTags    :: [RepoTag]
   } deriving (Eq, Ord, Show)
 
-data Stream = Stream Text
-            | StreamError Error
-  deriving (Eq, Ord, Show)
+data Stream = Stream        Text
+            | StreamError   Error
+            | StreamStatus  Status
+            | StreamUnknown A.Value
+  deriving (Eq, Show)
+
+data Status = Status {
+      _statusSubject      :: Text
+    , _statusId           :: Maybe Text
+    , _statusProgress     :: Maybe Progress
+    , _statusProgressText :: Maybe Text
+    } deriving (Eq, Ord, Show)
+
+data Progress = Progress {
+      _progressCurrent :: Int64
+    , _progressTotal   :: Int64
+    } deriving (Eq, Ord, Show)
 
 data Error = Error {
       _errorSubject :: Text
@@ -211,14 +225,41 @@ instance A.FromJSON Id where
 instance A.FromJSON Image where
     parseJSON = A.withObject "Image" $ \o -> do
                 Image <$> (o .: "Id")
+                      <*> (decodeMaybeId <$> o .:: ["Parent", "ParentId"])
                       <*> (o .: "Size")
                       <*> (o .: "VirtualSize")
-                      <*> (decodeMaybeId <$> o .:: ["Parent", "ParentId"])
                       <*> (mapMaybe decodeRepoTag . fromMaybe [] <$> (o .:? "RepoTags"))
 
 instance A.FromJSON Stream where
     parseJSON v = A.withObject "Stream" (\o -> Stream <$> (o .: "stream")) v
-            <|> StreamError <$> A.parseJSON v
+              <|> StreamError  <$> A.parseJSON v
+              <|> StreamStatus <$> A.parseJSON v
+              <|> pure (StreamUnknown v)
+
+instance A.FromJSON Status where
+    parseJSON = A.withObject "Status" $ \o -> do
+                subject      <- o .:  "status"
+                statusId     <- o .:? "id"
+                progressText <- o .:? "progress"
+                mprogress    <- o .:? "progressDetail"
+
+                progress <- case mprogress of
+                    Nothing -> pure Nothing
+                    Just p  -> do
+                        current <- p .:? "current"
+                        total   <- p .:? "total"
+                        return (Progress <$> current <*> total)
+
+                return (Status subject statusId progress progressText)
+
+{-
+
+{"status":"Extracting"
+,"progress":"[============================>                      ] 53.48 MB/92.46 MB"
+,"progressDetail":{"current":53477376,"total":92463446}
+,"id":"e26efd418c48"
+}
+-}
 
 instance A.FromJSON Error where
     parseJSON = A.withObject "Error" $ \o -> do
@@ -228,10 +269,11 @@ instance A.FromJSON Error where
                 message <- detail .: "message"
                 return (Error subject code message)
 
-
 showStream :: Stream -> B.ByteString
-showStream (Stream      txt) = T.encodeUtf8 txt
-showStream (StreamError err) = T.encodeUtf8 (T.pack (show err))
+showStream (Stream        txt) = T.encodeUtf8 txt
+showStream (StreamError   err) = T.encodeUtf8 (T.pack (show err)) <> "\n"
+showStream (StreamStatus  sts) = T.encodeUtf8 (T.pack (show sts)) <> "\n"
+showStream (StreamUnknown unk) = L.toStrict (A.encode unk)        <> "\n"
 
 -- Yay, Docker calls some fields different things depending on which route you
 -- call (e.g. Parent vs ParentId).
