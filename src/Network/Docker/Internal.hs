@@ -14,6 +14,7 @@ module Network.Docker.Internal (
     , runDocker
     , RequestURI
     , dockerRequest
+    , dockerRequest_
     , dockerRequestStream
     , dockerRequestBytes
     ) where
@@ -99,6 +100,14 @@ dockerRequest :: (MonadIO m, MonadThrow m, MonadBase IO m, A.FromJSON a)
 dockerRequest uri transformReq = do
     response <- dockerRequestBytes uri transformReq
     return (sinkJSON <$> response)
+
+dockerRequest_ :: (MonadIO m, MonadThrow m, MonadBase IO m)
+               => RequestURI
+               -> (Request -> Request)
+               -> DockerT m (Response ())
+dockerRequest_ uri transformReq = do
+    response <- dockerRequestBytes uri transformReq
+    return (const () <$> response)
 
 dockerRequestStream :: (MonadIO m, MonadThrow m, MonadBase IO m, A.FromJSON a)
               => RequestURI
