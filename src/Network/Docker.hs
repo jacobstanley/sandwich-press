@@ -1,10 +1,6 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 module Network.Docker (
       Docker
@@ -12,13 +8,7 @@ module Network.Docker (
     , runDocker
 
     , Id(..)
-    , RepoTag(..)
     , Image(..)
-    , Dockerfile
-    , Instruction(..)
-
-    , run
-    , runMany
 
     , build
 
@@ -36,7 +26,7 @@ module Network.Docker (
     , NetworkSettings(..)
     , IPPrefixLen
     , IPAddress(..)
-    , MACAddress(..)
+    , MacAddress(..)
 
     , create
     , containerFrom
@@ -46,13 +36,8 @@ module Network.Docker (
     , getImages
     , getImage
     , getContainer
-
-    , encodeDockerfile
-    , encodeInstruction
     ) where
 
-import qualified Codec.Archive.Tar as Tar
-import qualified Codec.Archive.Tar.Entry as Tar
 import           Control.Applicative ((<|>), empty)
 import           Data.Aeson ((.=), (.:), (.:?))
 import qualified Data.Aeson as A
@@ -63,12 +48,9 @@ import           Data.Conduit ((=$=), ($$+-))
 import qualified Data.Conduit.Binary as CB
 import qualified Data.Conduit.List as CL
 import           Data.Int (Int64)
-import           Data.List (intercalate)
 import           Data.Map (Map)
 import qualified Data.Map as M
 import           Data.Maybe (fromMaybe, mapMaybe)
-import           Data.Monoid ((<>))
-import           Data.Proxy (Proxy(..))
 import           Data.Set (Set)
 import qualified Data.Set as S
 import           Data.Text (Text)
@@ -81,17 +63,13 @@ import           Network.HTTP.Conduit (Request(..), RequestBody(..), Response(..
 import           Network.HTTP.Types.Header (hContentType)
 import           System.IO (stdout)
 
+import           Data.Dockerfile
 import           Network.Docker.Internal
 
 ------------------------------------------------------------------------
 
 newtype Id = Id { unId :: B.ByteString }
   deriving (Eq, Ord)
-
-data RepoTag = RepoTag {
-    repoName :: Text
-  , tagName  :: Text
-  } deriving (Eq, Ord)
 
 type ContainerName = Text
 
@@ -108,80 +86,6 @@ instance Identifier RepoTag where
 
 instance Identifier ContainerName where
     encodeIdentifier = id
-
-encodeRepoTag :: RepoTag -> Text
-encodeRepoTag (RepoTag repo tag) = repo <> ":" <> tag
-
-decodeRepoTag :: Text -> Maybe RepoTag
-decodeRepoTag txt
-    | txt == "<none>:<none>" = Nothing
-    | otherwise              = Just (RepoTag repo (T.drop 1 tag))
-  where
-    (repo, tag) = T.break (== ':') txt
-
-------------------------------------------------------------------------
-
-type Dockerfile (repo :: Symbol) (tag :: Symbol)
-    = [Instruction repo tag]
-
-data Instruction (repo :: Symbol) (tag :: Symbol) where
-    RUN :: [Text] -> Instruction repo tag
-
-------------------------------------------------------------------------
-
-run :: [Text] -> Dockerfile repo tag
-run xs = [RUN xs]
-
-runMany :: [[Text]] -> Dockerfile repo tag
-runMany xss = run $ ["sh", "-c", ys]
-  where
-    ys = T.unwords
-       . intercalate ["&&"]
-       . map (map quote')
-       $ xss
-
-------------------------------------------------------------------------
-
-baseImage :: forall repo tag.  (KnownSymbol repo, KnownSymbol tag)
-            => Dockerfile repo tag -> RepoTag
-baseImage _ = RepoTag (T.pack repo) (T.pack tag)
-  where
-    repo = symbolVal (Proxy :: Proxy repo)
-    tag  = symbolVal (Proxy :: Proxy tag)
-
-encodeDockerfile :: (KnownSymbol repo, KnownSymbol tag) => Dockerfile repo tag -> Text
-encodeDockerfile xs = T.unlines $
-    [ "FROM " <> encodeRepoTag (baseImage xs) ] <> map encodeInstruction xs
-
-encodeInstruction :: Instruction repo tag -> Text
-encodeInstruction (RUN args) =
-    "RUN [" <> T.intercalate ", " quoted <> "]"
-  where
-    quoted = map quote args
-
-quote :: Text -> Text
-quote xs = "\"" <> escape xs <> "\""
-  where
-    escape = T.replace "\"" "\\\""
-           . T.replace "\\" "\\\\"
-           . T.replace "\f" "\\f"
-           . T.replace "\n" "\\n"
-           . T.replace "\r" "\\r"
-           . T.replace "\t" "\\t"
-           . T.replace "\v" "\\v"
-
-quote' :: Text -> Text
-quote' xs | T.any needsQuote xs = quote xs
-          | otherwise           = xs
-  where
-    needsQuote x = x == '\\'
-                || x == '\"'
-                || x == ' '
-                || x == '\f'
-                || x == '\n'
-                || x == '\r'
-                || x == '\t'
-                || x == '\v'
 
 ------------------------------------------------------------------------
 
@@ -203,7 +107,7 @@ getContainer x = responseBody =<< dockerRequest uri id
 ------------------------------------------------------------------------
 
 build :: (KnownSymbol repo, KnownSymbol tag) => Dockerfile repo tag -> Docker Id
-build xs = do
+build dockerfile = do
     response <- dockerRequestStream ("/build" <> query) $ \x -> x {
         method         = "POST"
       , requestHeaders = [(hContentType, "application/tar")]
@@ -215,16 +119,12 @@ build xs = do
 
     imageId <$> getImage latest
   where
-    tar = mkTar [("Dockerfile", dockerfile)]
+    tar = tarDockerfile dockerfile
 
     -- TODO This should probably be a unique repo/tag
     -- TODO that we delete after building.
     latest = RepoTag "latest" "latest"
     query = "?t=" <> encodeRepoTag latest
-
-    dockerfile = L.fromStrict
-               . T.encodeUtf8
-               $ encodeDockerfile xs
 
 ------------------------------------------------------------------------
 
@@ -248,6 +148,10 @@ containerFrom image = CreateContainer {
     , createCommand      = []
     , createExposedPorts = S.empty
     , createPortBindings = M.empty
+    , createHostConfig   = HostConfig {
+        hostDns       = []
+      , hostDnsSearch = []
+      }
     }
 
 ------------------------------------------------------------------------
@@ -268,14 +172,7 @@ stop i timeout = responseBody <$> dockerRequest_ (uri <> query) go
     go x  = x { method = "POST" }
 
 ------------------------------------------------------------------------
-
-data Image = Image {
-    imageId          :: Id
-  , imageParent      :: Maybe Id
-  , imageSize        :: Int64
-  , imageVirtualSize :: Int64
-  , imageRepoTags    :: [RepoTag]
-  } deriving (Eq, Ord, Show)
+-- Streaming Status
 
 data Stream = Stream        Text
             | StreamError   Error
@@ -302,6 +199,18 @@ data Error = Error {
     } deriving (Eq, Ord, Show)
 
 ------------------------------------------------------------------------
+-- Images
+
+data Image = Image {
+    imageId          :: Id
+  , imageParent      :: Maybe Id
+  , imageSize        :: Int64
+  , imageVirtualSize :: Int64
+  , imageRepoTags    :: [RepoTag]
+  } deriving (Eq, Ord, Show)
+
+------------------------------------------------------------------------
+-- Containers
 
 type HostName    = Text
 type DomainName  = Text
@@ -309,10 +218,10 @@ type HostAddress = IPAddress
 type IPPrefixLen = Int
 
 newtype IPAddress = IPAddress { unIP :: Text }
-    deriving (Eq, Ord, Show)
+    deriving (Eq, Ord)
 
-newtype MACAddress = MACAddress { unMAC :: Text }
-    deriving (Eq, Ord, Show)
+newtype MacAddress = MacAddress { unMAC :: Text }
+    deriving (Eq, Ord)
 
 data Protocol = TCP | UDP
     deriving (Eq, Ord, Show)
@@ -332,6 +241,7 @@ data CreateContainer a = CreateContainer {
     , createCommand      :: [Text]
     , createExposedPorts :: Set SrcPort
     , createPortBindings :: Map SrcPort [DstPort]
+    , createHostConfig   :: HostConfig
     } deriving (Eq, Ord, Show)
 
 data CreateContainerResponse = CreateContainerResponse {
@@ -340,20 +250,26 @@ data CreateContainerResponse = CreateContainerResponse {
     } deriving (Eq, Ord, Show)
 
 data Container = Container {
-      containerId      :: Id
-    , containerImage   :: Id
-    , containerName    :: ContainerName
-    , containerPath    :: FilePath
-    , containerArgs    :: [Text]
-    , containerCreated :: UTCTime
-    , containerNetwork :: NetworkSettings
+      containerId         :: Id
+    , containerImage      :: Id
+    , containerName       :: ContainerName
+    , containerPath       :: FilePath
+    , containerArgs       :: [Text]
+    , containerCreated    :: UTCTime
+    , containerNetwork    :: NetworkSettings
+    , containerHostConfig :: HostConfig
+    } deriving (Eq, Ord, Show)
+
+data HostConfig = HostConfig {
+      hostDns       :: [IPAddress]
+    , hostDnsSearch :: [DomainName]
     } deriving (Eq, Ord, Show)
 
 data NetworkSettings = NetworkSettings {
       networkGateway     :: IPAddress
     , networkIPAddress   :: IPAddress
     , networkIPPrefixLen :: IPPrefixLen
-    , networkMACAddress  :: MACAddress
+    , networkMacAddress  :: MacAddress
     } deriving (Eq, Ord, Show)
 
 ------------------------------------------------------------------------
@@ -366,6 +282,13 @@ instance Identifier a => A.ToJSON (CreateContainer a) where
         , "Cmd"          .= createCommand
         , "ExposedPorts" .= createExposedPorts
         , "PortBindings" .= createPortBindings
+        , "HostConfig"   .= createHostConfig
+        ]
+
+instance A.ToJSON HostConfig where
+    toJSON HostConfig{..} = A.object [
+          "Dns"       .= hostDns
+        , "DnsSearch" .= hostDnsSearch
         ]
 
 instance A.ToJSON (Set SrcPort) where
@@ -383,6 +306,9 @@ instance A.ToJSON DstPort where
           "HostPort"    .= show port
         , "HostAddress" .= maybe "0.0.0.0" unIP addr
         ]
+
+instance A.ToJSON IPAddress where
+    toJSON = A.String . unIP
 
 encodeProtocol :: Protocol -> Text
 encodeProtocol TCP = "tcp"
@@ -453,13 +379,25 @@ instance A.FromJSON Container where
                           <*> o .: "Args"
                           <*> o .: "Created"
                           <*> o .: "NetworkSettings"
+                          <*> o .: "HostConfig"
 
 instance A.FromJSON NetworkSettings where
     parseJSON = A.withObject "NetworkSettings" $ \o -> do
-                NetworkSettings <$> (IPAddress <$> o .: "Gateway")
-                                <*> (IPAddress <$> o .: "IPAddress")
+                NetworkSettings <$> o .: "Gateway"
+                                <*> o .: "IPAddress"
                                 <*> o .: "IPPrefixLen"
-                                <*> (MACAddress <$> o .: "MacAddress")
+                                <*> o .: "MacAddress"
+
+instance A.FromJSON HostConfig where
+    parseJSON = A.withObject "HostConfig" $ \o -> do
+                HostConfig <$> (fromMaybe [] <$> o .: "Dns")
+                           <*> (fromMaybe [] <$> o .: "DnsSearch")
+
+instance A.FromJSON IPAddress where
+    parseJSON = A.withText "IPAddress" (pure . IPAddress)
+
+instance A.FromJSON MacAddress where
+    parseJSON = A.withText "MacAddress" (pure . MacAddress)
 
 ------------------------------------------------------------------------
 
@@ -480,17 +418,6 @@ decodeMaybeId txt | T.null txt = Nothing
                   | otherwise  = Just (Id (T.encodeUtf8 txt))
 
 ------------------------------------------------------------------------
-
-mkTar :: [(FilePath, L.ByteString)] -> L.ByteString
-mkTar = Tar.write . map go
-  where
-    go (file, bs) = Tar.fileEntry (fromPath file) bs
-
-    fromPath file = case Tar.toTarPath False file of
-      Left msg -> error ("mkTar: " ++ msg)
-      Right x  -> x
-
-------------------------------------------------------------------------
 -- Custom Show Instances
 
 instance Show Id where
@@ -498,9 +425,12 @@ instance Show Id where
     showParen (p > 10) $ showString "Id "
                        . showsPrec 11 x
 
-instance Show RepoTag where
-  showsPrec p (RepoTag r t) =
-    showParen (p > 10) $ showString "RepoTag "
-                       . showsPrec 11 r
-                       . showString " "
-                       . showsPrec 11 t
+instance Show IPAddress where
+  showsPrec p (IPAddress x) =
+    showParen (p > 10) $ showString "IPAddress "
+                       . showsPrec 11 x
+
+instance Show MacAddress where
+  showsPrec p (MacAddress x) =
+    showParen (p > 10) $ showString "MacAddress "
+                       . showsPrec 11 x

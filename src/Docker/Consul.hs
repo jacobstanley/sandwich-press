@@ -1,6 +1,3 @@
--- {-# LANGUAGE DataKinds #-}
--- {-# LANGUAGE KindSignatures #-}
--- {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Docker.Consul where
