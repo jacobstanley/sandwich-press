@@ -1,25 +1,17 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
-
-{-# OPTIONS_GHC -w #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Main where
 
 import           Control.Monad.IO.Class (liftIO)
-import           Data.Monoid ((<>))
-import           Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as T
-import           GHC.TypeLits (Symbol)
-import           Text.Shakespeare.Text (lbt)
 
 import           Data.Dockerfile
 import           Network.Docker
 
-import           Docker.Redhat.Cloudera
+import           Docker.Redhat
+--import           Docker.Redhat.Cloudera
 
 ------------------------------------------------------------------------
 
@@ -28,7 +20,7 @@ main = runDocker $ do
     --zki  <- build (zookeeper :: Dockerfile "centos" "6")
     --hdi  <- build (hadoop    :: Dockerfile "centos" "6")
 
-    dnsi <- build (dnsmasq :: Dockerfile "centos" "6")
+    dnsi <- build (from centos6 dnsmasq)
     dnsc <- createId <$> create (Just "dnsmasq") (containerFrom dnsi)
     start dnsc
 
@@ -39,5 +31,8 @@ main = runDocker $ do
 
 ------------------------------------------------------------------------
 
-dnsmasq :: Dockerfile repo tag
+data Dnsmasq
+
+dnsmasq :: Requires Redhat cs => Fragment cs (Dnsmasq ': cs)
 dnsmasq = run ["yum", "install", "-y", "dnsmasq"]
+      >>> addCapability

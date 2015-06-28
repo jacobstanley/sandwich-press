@@ -1,12 +1,13 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Docker.Redhat.Cloudera where
 
-import qualified Data.Text.Lazy as LT
-
 import Data.Dockerfile
---import Docker.Remote
+import Data.Text.Lazy (Text)
 
 import Docker.Redhat
 import Docker.Redhat.Java
@@ -14,13 +15,17 @@ import Docker.Redhat.Java
 ------------------------------------------------------------------------
 -- ZooKeeper
 
-zookeeper :: Redhat repo => Dockerfile repo tag
-zookeeper = oracleJDK7 <> clouderaRepos
-         <> run [ "yum", "install", "-y", "zookeeper-server" ]
-         <> run [ "mkdir", "-p", "/var/lib/zookeeper" ]
-         <> run [ "chown", "-R", "zookeeper", "/var/lib/zookeeper" ]
+data ZooKeeper
 
---startZookeeperCluster :: Int -> 
+zookeeper :: Requires Redhat   cs
+          => Requires Cloudera cs
+          => Fragment cs (ZooKeeper ': cs)
+zookeeper = run [ "yum", "install", "-y", "zookeeper-server" ]
+        >>> run [ "mkdir", "-p", "/var/lib/zookeeper" ]
+        >>> run [ "chown", "-R", "zookeeper", "/var/lib/zookeeper" ]
+        >>> addCapability
+
+--startZookeeperCluster :: Int ->
 
 --service zookeeper-server init --myid=1
 --service zookeeper-server start
@@ -28,7 +33,7 @@ zookeeper = oracleJDK7 <> clouderaRepos
 --tail -F /var/log/zookeeper/zookeeper.log
 
 
-zkCfg :: LT.Text
+zkCfg :: Text
 zkCfg = [lbt|tickTime=2000
             |dataDir=/var/lib/zookeeper/
             |clientPort=2181
@@ -42,17 +47,26 @@ zkCfg = [lbt|tickTime=2000
 ------------------------------------------------------------------------
 -- Hadoop
 
-hadoop :: Redhat repo => Dockerfile repo tag
-hadoop = oracleJDK7 <> clouderaRepos
-      <> run [ "yum", "install", "-y", "hadoop" ]
+data Hadoop
+
+hadoop :: Requires Redhat   cs
+       => Requires Cloudera cs
+       => Fragment cs (Hadoop ': cs)
+hadoop = run [ "yum", "install", "-y", "hadoop" ]
+     >>> addCapability
 
 ------------------------------------------------------------------------
--- Repos
+-- Cloudera Repos
 
-clouderaRepos :: Redhat repo => Dockerfile repo tag
+data Cloudera
+
+clouderaRepos :: Requires Redhat6 cs
+              => Requires Java    cs
+              => Fragment cs (Cloudera ': cs)
 clouderaRepos = copyUtf8 0o644 "/etc/yum.repos.d/cloudera.repo"        repo
-             <> copyUtf8 0o644 "/etc/pki/rpm-gpg/RPM-GPG-KEY-cloudera" gpg
-             <> run [ "yum", "clean", "all" ]
+            >>> copyUtf8 0o644 "/etc/pki/rpm-gpg/RPM-GPG-KEY-cloudera" gpg
+            >>> run [ "yum", "clean", "all" ]
+            >>> addCapability
   where
     repo = [lbt|[cloudera-cdh5]
                |name=Cloudera's Distribution for Hadoop, Version 5.3.3

@@ -51,6 +51,7 @@ import           Data.Int (Int64)
 import           Data.Map (Map)
 import qualified Data.Map as M
 import           Data.Maybe (fromMaybe, mapMaybe)
+import           Data.Monoid ((<>))
 import           Data.Set (Set)
 import qualified Data.Set as S
 import           Data.Text (Text)
@@ -58,7 +59,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import           Data.Time (UTCTime)
 import           Data.Word (Word16)
-import           GHC.TypeLits
 import           Network.HTTP.Conduit (Request(..), RequestBody(..), Response(..))
 import           Network.HTTP.Types.Header (hContentType)
 import           System.IO (stdout)
@@ -106,7 +106,7 @@ getContainer x = responseBody =<< dockerRequest uri id
 
 ------------------------------------------------------------------------
 
-build :: (KnownSymbol repo, KnownSymbol tag) => Dockerfile repo tag -> Docker Id
+build :: Dockerfile cs -> Docker Id
 build dockerfile = do
     response <- dockerRequestStream ("/build" <> query) $ \x -> x {
         method         = "POST"

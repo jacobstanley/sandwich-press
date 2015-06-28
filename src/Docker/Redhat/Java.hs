@@ -1,7 +1,12 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Docker.Redhat.Java (
-      oracleJDK7
+      Java
+    , Java7
+    , oracleJDK7
     ) where
 
 import Data.Dockerfile
@@ -10,8 +15,15 @@ import Docker.Redhat
 
 ------------------------------------------------------------------------
 
-oracleJDK7 :: Redhat repo => Dockerfile repo tag
-oracleJDK7 = wget <> runMany [fetch, install, rm]
+data Java
+data Java7
+
+oracleJDK7 :: Requires Redhat cs
+           => Requires Wget   cs
+           => Fragment cs (Java ': Java7 ': cs)
+oracleJDK7 = runMany [fetch, install, rm]
+         >>> addCapability
+         >>> addCapability
   where
     fetch = [ "wget", "--no-cookies"
                     , "--progress=bar:force"
