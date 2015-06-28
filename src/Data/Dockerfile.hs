@@ -220,6 +220,7 @@ quote' xs | T.any needsQuote xs = quote xs
     needsQuote x = x == '\\'
                 || x == '\"'
                 || x == ' '
+                || x == ';'
                 || x == '\f'
                 || x == '\n'
                 || x == '\r'

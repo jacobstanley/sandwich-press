@@ -9,12 +9,18 @@ module Data.Dockerfile.TypeLevel where
 
 ------------------------------------------------------------------------
 
-type family Contains (needle :: *) (haystack :: [*]) :: Bool where
-  Contains x '[]       = 'False
-  Contains x (x ': ys) = 'True
-  Contains x (y ': ys) = Contains x ys
+-- | Searches for a required type in the list, and evaluates to True if it is
+-- missing.
+type family Missing (requirement :: *) (provided :: [*]) :: Bool where
+  Missing x '[]       = 'True
+  Missing x (x ': ys) = 'False
+  Missing x (y ': ys) = Missing x ys
 
-type Requires x cs = Contains x cs ~ 'True
+-- NOTE Using `Missing x cs ~ False` gives better error messages
+-- NOTE than `Contains x cs ~ True`.
+
+-- | Requires that `cs` contains `x`.
+type Requires x cs = Missing x cs ~ 'False
 
 ------------------------------------------------------------------------
 

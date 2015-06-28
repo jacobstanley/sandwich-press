@@ -19,17 +19,10 @@ data Java
 data Java7
 
 oracleJDK7 :: Requires Redhat cs
-           => Requires Wget   cs
            => Fragment cs (Java ': Java7 ': cs)
-oracleJDK7 = runMany [fetch, install, rm]
+oracleJDK7 = installRpm' [("oraclelicense", "accept-securebackup-cookie")] url sha
          >>> addCapability
          >>> addCapability
   where
-    fetch = [ "wget", "--no-cookies"
-                    , "--progress=bar:force"
-                    , "--header", "Cookie: oraclelicense=accept-securebackup-cookie"
-                    , "http://download.oracle.com/otn-pub/java/jdk/7u76-b13/jdk-7u76-linux-x64.rpm"
-                    , "-O", "jdk7.rpm" ]
-
-    install = [ "yum", "install", "-y", "jdk7.rpm" ]
-    rm      = [ "rm", "jdk7.rpm" ]
+    url = "http://download.oracle.com/otn-pub/java/jdk/7u80-b15/jdk-7u80-linux-x64.rpm"
+    sha = SHA256 "405d5fb7fa8cc4b5e5fe2c5fa349af6fbd742d9967772163d1fa8ea4ce35cd7b"

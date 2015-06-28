@@ -7,7 +7,8 @@
 module Docker.Redhat.Cloudera where
 
 import Data.Dockerfile
-import Data.Text.Lazy (Text)
+import qualified Data.Text.Lazy as LT
+import Network.Docker
 
 import Docker.Redhat
 import Docker.Redhat.Java
@@ -18,6 +19,7 @@ import Docker.Redhat.Java
 data ZooKeeper
 
 zookeeper :: Requires Redhat   cs
+          => Requires Java     cs
           => Requires Cloudera cs
           => Fragment cs (ZooKeeper ': cs)
 zookeeper = run [ "yum", "install", "-y", "zookeeper-server" ]
@@ -25,7 +27,20 @@ zookeeper = run [ "yum", "install", "-y", "zookeeper-server" ]
         >>> run [ "chown", "-R", "zookeeper", "/var/lib/zookeeper" ]
         >>> addCapability
 
---startZookeeperCluster :: Int ->
+------------------------------------------------------------------------
+-- ZooKeeper Cluster
+
+startZookeeperCluster :: Int -> Docker [Id]
+startZookeeperCluster _ = do
+    zki  <- build zkImage
+
+    return [zki]
+  where
+    zkImage = from centos6
+            $ oracleJDK7
+          >>> clouderaRepos
+          >>> zookeeper
+          >>> inotifyTools
 
 --service zookeeper-server init --myid=1
 --service zookeeper-server start
@@ -33,7 +48,7 @@ zookeeper = run [ "yum", "install", "-y", "zookeeper-server" ]
 --tail -F /var/log/zookeeper/zookeeper.log
 
 
-zkCfg :: Text
+zkCfg :: LT.Text
 zkCfg = [lbt|tickTime=2000
             |dataDir=/var/lib/zookeeper/
             |clientPort=2181
@@ -50,6 +65,7 @@ zkCfg = [lbt|tickTime=2000
 data Hadoop
 
 hadoop :: Requires Redhat   cs
+       => Requires Java     cs
        => Requires Cloudera cs
        => Fragment cs (Hadoop ': cs)
 hadoop = run [ "yum", "install", "-y", "hadoop" ]
@@ -60,9 +76,7 @@ hadoop = run [ "yum", "install", "-y", "hadoop" ]
 
 data Cloudera
 
-clouderaRepos :: Requires Redhat6 cs
-              => Requires Java    cs
-              => Fragment cs (Cloudera ': cs)
+clouderaRepos :: Requires Redhat6 cs => Fragment cs (Cloudera ': cs)
 clouderaRepos = copyUtf8 0o644 "/etc/yum.repos.d/cloudera.repo"        repo
             >>> copyUtf8 0o644 "/etc/pki/rpm-gpg/RPM-GPG-KEY-cloudera" gpg
             >>> run [ "yum", "clean", "all" ]
